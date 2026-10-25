@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Workout Log</title>
 <style>
-  :root { --bg:#fafafa; --fg:#1a1a1a; --card:#fff; --mut:#666; --line:#ddd; --acc:#0a6cff; }
+  :root { --bg:#fafafa; --fg:#1a1a1a; --card:#fff; --mut:#666; --line:#ddd; --acc:#0a6cff; --good:#1a7f37; --bad:#cf222e; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#111; --fg:#eee; --card:#1b1b1b; --mut:#999; --line:#333; --acc:#5aa2ff; }
+    :root { --bg:#111; --fg:#eee; --card:#1b1b1b; --mut:#999; --line:#333; --acc:#5aa2ff; --good:#3fb950; --bad:#ff7b72; }
   }
   body { font:16px system-ui,sans-serif; background:var(--bg); color:var(--fg); max-width:640px; margin:0 auto; padding:16px; }
   h1 { font-size:1.4rem; } h2 { font-size:1.05rem; margin-top:1.5rem; }
@@ -26,6 +26,7 @@
   table { width:100%; border-collapse:collapse; text-align:right; }
   th, td { padding:6px 4px; border-bottom:1px solid var(--line); }
   th:first-child, td:first-child { text-align:left; }
+  .good { color:var(--good); font-weight:600; } .bad { color:var(--bad); font-weight:600; }
   th { font-size:.8rem; color:var(--mut); font-weight:normal; }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 </style>
@@ -148,7 +149,7 @@ function render() {
   $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Miles<th>Calories<th>Avg HR</tr>" +
     Object.keys(wk).sort().reverse().map(k => {
       const t = wk[k];
-      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.m ? (t.m / M_PER.mi).toFixed(1) : "–"}<td>${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
+      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.m ? (t.m / M_PER.mi).toFixed(1) : "–"}<td class="${t.cal >= 4800 ? "good" : "bad"}">${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
     }).join("");
 
   const by = {};
