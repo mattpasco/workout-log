@@ -43,7 +43,7 @@
   <label>Type <select name="type" required></select></label>
   <label>Duration (min) <input name="min" type="number" step="any" min="0" required></label>
   <label><span id="dl">Distance</span> <input name="dist" type="number" step="any" min="0"></label>
-  <label id="sul" hidden>Pool units <select name="su"><option value="m">meters</option><option value="yd">yards</option></select></label>
+  <label id="sul" hidden>Swim units <select name="su"></select></label>
   <label>Calories <input name="cal" type="number" min="0"></label>
   <label>Avg HR (bpm) <input name="hr" type="number" min="0"></label>
   <label>Max HR (bpm) <input name="hrmax" type="number" min="0"></label>
@@ -101,28 +101,34 @@ const save = () => { localStorage.setItem("workouts", JSON.stringify(items)); lo
 const isSwim = t => TYPES[t].kind === "swim";
 const mmss = m => { const s = Math.round(m * 60); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const hm = m => `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
-const swimF = (type, su) => type === "Pool Swim" && su === "yd" ? 0.9144 : 1; // metres per swim unit (pool can be yards)
+const SWIM_U = { "Pool Swim": { m: 1, yd: 0.9144 }, "Openwater Swim": { m: 1, mi: M_PER.mi } }; // metres per unit
+const swimU = (type, su) => su in SWIM_U[type] ? su : "m";
+const swimF = (type, su) => SWIM_U[type][swimU(type, su)];
 const per = w => isSwim(w.type) ? swimF(w.type, w.su) : M_PER[unit];
-const dist = w => w.m == null ? "" : isSwim(w.type) ? `${Math.round(w.m / per(w))} ${per(w) === 1 ? "m" : "yd"}` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
+const dist = w => w.m == null ? "" : isSwim(w.type) ? `${(w.m / per(w)).toFixed(swimU(w.type, w.su) === "mi" ? 2 : 0)} ${swimU(w.type, w.su)}` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
 
 function derived(w) {
   if (!w.m || !w.min) return "";
   const k = TYPES[w.type].kind;
   if (k === "speed") return `${(w.m / M_PER[unit] / (w.min / 60)).toFixed(1)} ${unit}/h`;
-  if (k === "swim") return `${mmss(w.min / (w.m / per(w) / 100))} /100${per(w) === 1 ? "m" : "yd"}`;
+  if (k === "swim") { const u = swimU(w.type, w.su) === "yd" ? "yd" : "m"; return `${mmss(w.min / (w.m / SWIM_U[w.type][u] / 100))} /100${u}`; }
   return `${mmss(w.min / (w.m / M_PER[unit]))} /${unit}`;
 }
 
 function render() {
   $("#u").value = unit;
-  $("#sul").hidden = f.type.value !== "Pool Swim";
+  $("#sul").hidden = !isSwim(f.type.value);
+  if (isSwim(f.type.value) && f.su.dataset.t !== f.type.value) {
+    f.su.innerHTML = Object.keys(SWIM_U[f.type.value]).map(u => `<option>${u}</option>`).join("");
+    f.su.dataset.t = f.type.value;
+  }
   const hide = TYPES[f.type.value].hide || [];
   for (const k of ["min", "dist", "cal", "hr", "hrmax", "note"]) {
     f[k].parentElement.hidden = hide.includes(k);
     if (hide.includes(k)) f[k].value = "";
   }
   f.min.required = !hide.includes("min");
-  $("#dl").textContent = `Distance (${isSwim(f.type.value) ? (swimF(f.type.value, f.su.value) === 1 ? "m" : "yd") : unit})`;
+  $("#dl").textContent = `Distance (${isSwim(f.type.value) ? swimU(f.type.value, f.su.value) : unit})`;
   const live = items.filter(w => !w.del);
   $("#list").innerHTML = live.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
     const bits = TYPES[w.type].kind === "rest" ? [] : [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
@@ -168,7 +174,7 @@ f.onsubmit = e => {
   items = items.filter(w => w.id !== editing);
   items.push({
     id: editing ?? Date.now(), upd: Date.now(), date: f.date.value, type: f.type.value, min: n("min") ?? 0,
-    su: f.type.value === "Pool Swim" ? f.su.value : undefined,
+    su: isSwim(f.type.value) ? f.su.value : undefined,
     m: d == null ? undefined : d * (isSwim(f.type.value) ? swimF(f.type.value, f.su.value) : M_PER[unit]),
     cal: n("cal"), hr: n("hr"), hrmax: n("hrmax"), note: f.note.value.trim() || undefined,
   });
@@ -190,6 +196,7 @@ $("#list").onclick = e => {
     const w = items.find(w => w.id == edit);
     editing = w.id;
     f.date.value = w.date; f.type.value = w.type; f.min.value = w.min;
+    render();
     f.su.value = w.su || "m";
     f.dist.value = w.m == null ? "" : +(w.m / per(w)).toFixed(3);
     f.cal.value = w.cal ?? ""; f.hr.value = w.hr ?? ""; f.hrmax.value = w.hrmax ?? ""; f.note.value = w.note ?? "";
