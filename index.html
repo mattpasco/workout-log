@@ -102,12 +102,13 @@ const swimF = (type, su) => SWIM_U[type][swimU(type, su)];
 const per = w => isSwim(w.type) ? swimF(w.type, w.su) : M_PER[unit];
 const dist = w => w.m == null ? "" : isSwim(w.type) ? `${(w.m / per(w)).toFixed(swimU(w.type, w.su) === "mi" ? 2 : 0)} ${swimU(w.type, w.su)}` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
 
+// Fixed pace units: min/mi for foot travel, min/100yd for swims, mph for bikes (regardless of the distance-unit setting).
 function derived(w) {
   if (!w.m || !w.min) return "";
   const k = TYPES[w.type].kind;
-  if (k === "speed") return `${(w.m / M_PER[unit] / (w.min / 60)).toFixed(1)} ${unit}/h`;
-  if (k === "swim") { const u = swimU(w.type, w.su) === "yd" ? "yd" : "m"; return `${mmss(w.min / (w.m / SWIM_U[w.type][u] / 100))} /100${u}`; }
-  return `${mmss(w.min / (w.m / M_PER[unit]))} /${unit}`;
+  if (k === "speed") return `${(w.m / M_PER.mi / (w.min / 60)).toFixed(1)} mph`;
+  if (k === "swim") return `${mmss(w.min / (w.m / 0.9144 / 100))} /100yd`;
+  return `${mmss(w.min / (w.m / M_PER.mi))} /mi`;
 }
 
 function render() {
