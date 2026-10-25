@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workout Log</title>
+<style>
+  :root { --bg:#fafafa; --fg:#1a1a1a; --card:#fff; --mut:#666; --line:#ddd; --acc:#0a6cff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#eee; --card:#1b1b1b; --mut:#999; --line:#333; --acc:#5aa2ff; }
+  }
+  body { font:16px system-ui,sans-serif; background:var(--bg); color:var(--fg); max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.4rem; } h2 { font-size:1.05rem; margin-top:1.5rem; }
+  form, li, .tot { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  form { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  label { display:flex; flex-direction:column; font-size:.8rem; color:var(--mut); gap:2px; }
+  input, select, button { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .wide { grid-column:1/-1; }
+  button { cursor:pointer; } button.go { background:var(--acc); color:#fff; border-color:var(--acc); }
+  ul { list-style:none; padding:0; display:grid; gap:8px; }
+  li { display:flex; justify-content:space-between; gap:8px; }
+  li small, .mut { color:var(--mut); }
+  .del { border:0; background:none; color:var(--mut); }
+  .tot { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+<h1>Workout Log</h1>
+
+<form id="f">
+  <label>Date <input name="date" type="date" required></label>
+  <label>Type <select name="type" required></select></label>
+  <label>Duration (min) <input name="min" type="number" step="any" min="0" required></label>
+  <label><span id="dl">Distance</span> <input name="dist" type="number" step="any" min="0"></label>
+  <label>Calories <input name="cal" type="number" min="0"></label>
+  <label>Avg HR (bpm) <input name="hr" type="number" min="0"></label>
+  <label>Max HR (bpm) <input name="hrmax" type="number" min="0"></label>
+  <label>Notes <input name="note"></label>
+  <button class="go wide">Add workout</button>
+</form>
+
+<h2>Totals</h2>
+<div class="tot" id="tot"></div>
+
+<h2>History</h2>
+<ul id="list"></ul>
+
+<div class="row">
+  <label class="row">Distance units
+    <select id="u"><option value="km">km</option><option value="mi">mi</option></select>
+  </label>
+  <button id="exp">Export JSON</button>
+  <button id="imp">Import JSON</button>
+  <input id="file" type="file" accept=".json" hidden>
+</div>
+<p class="mut">Data is stored only in this browser. Export regularly to back it up.</p>
+
+<script>
+// kind: how derived pace/speed is shown. swim distances are entered in metres, everything else in km/mi.
+const TYPES = {
+  "Outdoor Bike":   { kind: "speed" },
+  "Indoor Bike":    { kind: "speed" },
+  "Outdoor Run":    { kind: "pace" },
+  "Indoor Run":     { kind: "pace" },
+  "Openwater Swim": { kind: "swim" },
+  "Pool Swim":      { kind: "swim" },
+  "Hike":           { kind: "pace" },
+  "Walk":           { kind: "pace" },
+};
+const M_PER = { km: 1000, mi: 1609.344 };
+const $ = s => document.querySelector(s), f = $("#f");
+const load = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+let items = load("workouts") || [];
+let unit = load("unit") || "km";
+const save = () => { localStorage.setItem("workouts", JSON.stringify(items)); localStorage.setItem("unit", JSON.stringify(unit)); };
+const isSwim = t => TYPES[t].kind === "swim";
+const mmss = m => { const s = Math.round(m * 60); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const hm = m => `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
+const dist = w => w.m == null ? "" : isSwim(w.type) ? `${Math.round(w.m)} m` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
+
+function derived(w) {
+  if (!w.m || !w.min) return "";
+  const k = TYPES[w.type].kind;
+  if (k === "speed") return `${(w.m / M_PER[unit] / (w.min / 60)).toFixed(1)} ${unit}/h`;
+  if (k === "swim") return `${mmss(w.min / (w.m / 100))} /100m`;
+  return `${mmss(w.min / (w.m / M_PER[unit]))} /${unit}`;
+}
+
+function render() {
+  $("#u").value = unit;
+  $("#dl").textContent = isSwim(f.type.value) ? "Distance (m)" : `Distance (${unit})`;
+  $("#list").innerHTML = [...items].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
+    const bits = [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
+    return `<li><div><b>${w.type}</b> <small>${w.date}</small><br>${bits.join(" · ")}${w.note ? `<br><small>${esc(w.note)}</small>` : ""}</div>
+      <button class="del" data-id="${w.id}" title="Delete" aria-label="Delete">✕</button></li>`;
+  }).join("") || '<li class="mut">No workouts yet.</li>';
+
+  const by = {};
+  for (const w of items) {
+    const t = by[w.type] ??= { n: 0, min: 0, m: 0, cal: 0 };
+    t.n++; t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
+  }
+  $("#tot").innerHTML = Object.entries(by).map(([type, t]) =>
+    `<div><b>${type}</b><br>${t.n}× · ${hm(t.min)}<br>${dist({ type, m: t.m })}${t.cal ? ` · ${t.cal} kcal` : ""}</div>`).join("") || '<span class="mut">—</span>';
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+f.type.innerHTML = Object.keys(TYPES).map(t => `<option>${t}</option>`).join("");
+f.date.valueAsDate = new Date();
+f.type.onchange = render;
+$("#u").onchange = e => { unit = e.target.value; save(); render(); };
+
+f.onsubmit = e => {
+  e.preventDefault();
+  const n = k => f[k].value === "" ? undefined : +f[k].value;
+  const d = n("dist");
+  items.push({
+    id: Date.now(), date: f.date.value, type: f.type.value, min: n("min"),
+    m: d == null ? undefined : d * (isSwim(f.type.value) ? 1 : M_PER[unit]),
+    cal: n("cal"), hr: n("hr"), hrmax: n("hrmax"), note: f.note.value.trim() || undefined,
+  });
+  save();
+  for (const k of ["min", "dist", "cal", "hr", "hrmax", "note"]) f[k].value = "";
+  render();
+};
+
+$("#list").onclick = e => {
+  const id = e.target.dataset.id;
+  if (id && confirm("Delete this workout?")) { items = items.filter(w => w.id != id); save(); render(); }
+};
+
+$("#exp").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(items, null, 1)], { type: "application/json" }));
+  a.download = `workouts-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+};
+$("#imp").onclick = () => $("#file").click();
+$("#file").onchange = async e => {
+  try {
+    const data = JSON.parse(await e.target.files[0].text());
+    if (!Array.isArray(data) || data.some(w => !TYPES[w.type] || !w.date || !(w.min >= 0))) throw 0;
+    const have = new Set(items.map(w => w.id));
+    items.push(...data.filter(w => !have.has(w.id)));
+    save(); render();
+  } catch { alert("Not a valid workout export."); }
+  e.target.value = "";
+};
+
+render();
+</script>
+</body>
+</html>
