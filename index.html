@@ -15,6 +15,7 @@
   form { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   label { display:flex; flex-direction:column; font-size:.8rem; color:var(--mut); gap:2px; }
   input, select, button { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  [hidden] { display:none !important; }
   .wide { grid-column:1/-1; }
   button { cursor:pointer; } button.go { background:var(--acc); color:#fff; border-color:var(--acc); }
   ul { list-style:none; padding:0; display:grid; gap:8px; }
@@ -42,6 +43,7 @@
   <label>Type <select name="type" required></select></label>
   <label>Duration (min) <input name="min" type="number" step="any" min="0" required></label>
   <label><span id="dl">Distance</span> <input name="dist" type="number" step="any" min="0"></label>
+  <label id="sul" hidden>Pool units <select name="su"><option value="m">meters</option><option value="yd">yards</option></select></label>
   <label>Calories <input name="cal" type="number" min="0"></label>
   <label>Avg HR (bpm) <input name="hr" type="number" min="0"></label>
   <label>Max HR (bpm) <input name="hrmax" type="number" min="0"></label>
@@ -98,19 +100,22 @@ const save = () => { localStorage.setItem("workouts", JSON.stringify(items)); lo
 const isSwim = t => TYPES[t].kind === "swim";
 const mmss = m => { const s = Math.round(m * 60); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const hm = m => `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
-const dist = w => w.m == null ? "" : isSwim(w.type) ? `${Math.round(w.m)} m` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
+const swimF = (type, su) => type === "Pool Swim" && su === "yd" ? 0.9144 : 1; // metres per swim unit (pool can be yards)
+const per = w => isSwim(w.type) ? swimF(w.type, w.su) : M_PER[unit];
+const dist = w => w.m == null ? "" : isSwim(w.type) ? `${Math.round(w.m / per(w))} ${per(w) === 1 ? "m" : "yd"}` : `${(w.m / M_PER[unit]).toFixed(2)} ${unit}`;
 
 function derived(w) {
   if (!w.m || !w.min) return "";
   const k = TYPES[w.type].kind;
   if (k === "speed") return `${(w.m / M_PER[unit] / (w.min / 60)).toFixed(1)} ${unit}/h`;
-  if (k === "swim") return `${mmss(w.min / (w.m / 100))} /100m`;
+  if (k === "swim") return `${mmss(w.min / (w.m / per(w) / 100))} /100${per(w) === 1 ? "m" : "yd"}`;
   return `${mmss(w.min / (w.m / M_PER[unit]))} /${unit}`;
 }
 
 function render() {
   $("#u").value = unit;
-  $("#dl").textContent = isSwim(f.type.value) ? "Distance (m)" : `Distance (${unit})`;
+  $("#sul").hidden = f.type.value !== "Pool Swim";
+  $("#dl").textContent = `Distance (${isSwim(f.type.value) ? (swimF(f.type.value, f.su.value) === 1 ? "m" : "yd") : unit})`;
   const live = items.filter(w => !w.del);
   $("#list").innerHTML = live.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
     const bits = [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
@@ -123,14 +128,14 @@ function render() {
   for (const w of live) {
     const d = new Date(w.date + "T00:00");
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
-    const t = wk[d.toLocaleDateString("en-CA")] ??= { n: 0, min: 0, cal: 0, hrMin: 0, hrSum: 0 };
-    t.n++; t.min += w.min; t.cal += w.cal || 0;
+    const t = wk[d.toLocaleDateString("en-CA")] ??= { n: 0, min: 0, m: 0, cal: 0, hrMin: 0, hrSum: 0 };
+    t.n++; t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
     if (w.hr) { t.hrMin += w.min; t.hrSum += w.hr * w.min; }
   }
-  $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Calories<th>Avg HR</tr>" +
+  $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Miles<th>Calories<th>Avg HR</tr>" +
     Object.keys(wk).sort().reverse().map(k => {
       const t = wk[k];
-      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
+      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.m ? (t.m / M_PER.mi).toFixed(1) : "–"}<td>${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
     }).join("");
 
   const by = {};
@@ -145,7 +150,7 @@ const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&
 
 f.type.innerHTML = Object.keys(TYPES).map(t => `<option>${t}</option>`).join("");
 f.date.valueAsDate = new Date();
-f.type.onchange = render;
+f.type.onchange = f.su.onchange = render;
 $("#u").onchange = e => { unit = e.target.value; save(); render(); };
 
 f.onsubmit = e => {
@@ -155,7 +160,8 @@ f.onsubmit = e => {
   items = items.filter(w => w.id !== editing);
   items.push({
     id: editing ?? Date.now(), upd: Date.now(), date: f.date.value, type: f.type.value, min: n("min"),
-    m: d == null ? undefined : d * (isSwim(f.type.value) ? 1 : M_PER[unit]),
+    su: f.type.value === "Pool Swim" ? f.su.value : undefined,
+    m: d == null ? undefined : d * (isSwim(f.type.value) ? swimF(f.type.value, f.su.value) : M_PER[unit]),
     cal: n("cal"), hr: n("hr"), hrmax: n("hrmax"), note: f.note.value.trim() || undefined,
   });
   save(); sync();
@@ -176,7 +182,8 @@ $("#list").onclick = e => {
     const w = items.find(w => w.id == edit);
     editing = w.id;
     f.date.value = w.date; f.type.value = w.type; f.min.value = w.min;
-    f.dist.value = w.m == null ? "" : +(w.m / (isSwim(w.type) ? 1 : M_PER[unit])).toFixed(3);
+    f.su.value = w.su || "m";
+    f.dist.value = w.m == null ? "" : +(w.m / per(w)).toFixed(3);
     f.cal.value = w.cal ?? ""; f.hr.value = w.hr ?? ""; f.hrmax.value = w.hrmax ?? ""; f.note.value = w.note ?? "";
     $("#sub").textContent = "Save changes"; $("#cancel").hidden = false;
     render(); f.scrollIntoView();
