@@ -33,6 +33,13 @@
 <body>
 <h1>Workout Log</h1>
 
+<form id="lock" hidden>
+  <p class="wide mut">Type your password (10+ characters). Use the same one on every device; it keeps your log in sync.</p>
+  <input class="wide" id="pw" type="password" minlength="10" required autocomplete="current-password">
+  <button class="go wide">Unlock</button>
+</form>
+
+<div id="app">
 <h2>Weeks</h2>
 <table id="weeks"></table>
 
@@ -62,20 +69,9 @@
   <label class="row">Distance units
     <select id="u"><option value="km">km</option><option value="mi">mi</option></select>
   </label>
-  <button id="exp">Export JSON</button>
-  <button id="imp">Import JSON</button>
-  <input id="file" type="file" accept=".json" hidden>
+  <button id="lockBtn">Lock</button>
 </div>
-<details>
-  <summary>Sync across devices <span class="mut" id="st"></span></summary>
-  <p class="mut">Data is saved in this browser and, if configured, synced to a private GitHub repo.
-    Create a fine-grained token with <i>Contents: read &amp; write</i> on that one repo, and paste it on each device.</p>
-  <div class="row">
-    <input id="repo" placeholder="owner/repo" value="mattpasco/workout-data">
-    <input id="tok" type="password" placeholder="GitHub token" autocomplete="off">
-    <button id="syncbtn">Save &amp; sync</button>
-  </div>
-</details>
+</div>
 
 <script>
 // kind: how derived pace/speed is shown. swim distances are entered in metres, everything else in km/mi.
@@ -94,7 +90,6 @@ const M_PER = { km: 1000, mi: 1609.344 };
 const $ = s => document.querySelector(s), f = $("#f");
 const load = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
 let items = load("workouts") || []; // deletions stay as {id, upd, del:true} tombstones so they sync
-let cfg = load("sync") || {};
 let editing = null;
 let unit = load("unit") || "km";
 const save = () => { localStorage.setItem("workouts", JSON.stringify(items)); localStorage.setItem("unit", JSON.stringify(unit)); };
@@ -116,6 +111,9 @@ function derived(w) {
 }
 
 function render() {
+  $("#lock").hidden = !!getKey();
+  $("#app").hidden = !getKey();
+  if (!getKey()) return;
   $("#u").value = unit;
   $("#sul").hidden = !isSwim(f.type.value);
   if (isSwim(f.type.value) && f.su.dataset.t !== f.type.value) {
@@ -208,61 +206,37 @@ $("#list").onclick = e => {
   }
 };
 
-// Sync: the whole list lives in data.json in a private repo; per-id newest `upd` wins on merge.
-const setStatus = t => $("#st").textContent = t;
+// Sync: each device with the same password shares one document on the MattTrips sync Worker (a key-value
+// store of records, newest `updatedAt` wins). The key is a hash of the password, so there is no login.
+const SYNC_URL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? "http://127.0.0.1:8787/s/" : "https://matttrips-sync.matttrips-sync.workers.dev/s/";
 const merge = remote => {
   const m = new Map(items.map(w => [w.id, w]));
   for (const r of remote) if (!m.has(r.id) || (r.upd || 0) > (m.get(r.id).upd || 0)) m.set(r.id, r);
   items = [...m.values()];
 };
-const api = (method, body) => fetch(`https://api.github.com/repos/${cfg.repo}/contents/data.json`, {
-  method, cache: "no-store", body: body && JSON.stringify(body),
-  headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/vnd.github+json" },
-});
+const getKey = () => { try { return localStorage.getItem("wl:key"); } catch { return null; } };
 let queue = Promise.resolve();
 const sync = () => queue = queue.then(doSync);
 async function doSync() {
-  if (!cfg.token || !cfg.repo) return;
-  setStatus("· syncing…");
+  const key = getKey();
+  if (!key) return;
   try {
-    for (let i = 0; i < 3; i++) {
-      const g = await api("GET");
-      let sha;
-      if (g.ok) { const j = await g.json(); sha = j.sha; merge(JSON.parse(decodeURIComponent(escape(atob(j.content))))); }
-      else if (g.status !== 404) throw new Error(g.status);
-      save(); render();
-      const p = await api("PUT", { message: "sync", sha, content: btoa(unescape(encodeURIComponent(JSON.stringify(items)))) });
-      if (p.ok) return setStatus("· synced " + new Date().toLocaleTimeString());
-      if (p.status !== 409 && p.status !== 422) throw new Error(p.status);
-    }
-    throw new Error("conflict");
-  } catch (e) { setStatus(`· sync failed (${e.message}); saved locally`); }
+    const doc = { trips: Object.fromEntries(items.map(w => [w.id, { ...w, updatedAt: w.upd || 0 }])) };
+    const res = await fetch(SYNC_URL + key, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(doc) });
+    if (!res.ok) throw new Error(res.status);
+    merge(Object.values((await res.json()).trips)); // keeps edits made while the request was out
+    save(); render(); $("#lockBtn").textContent = "Lock";
+  } catch { $("#lockBtn").textContent = "Lock ⚠"; } // offline: the next change, launch, or 'online' event retries
 }
-$("#repo").value = cfg.repo || $("#repo").value;
-$("#syncbtn").onclick = () => {
-  cfg = { repo: $("#repo").value.trim(), token: $("#tok").value.trim() || cfg.token };
-  localStorage.setItem("sync", JSON.stringify(cfg));
-  $("#tok").value = ""; sync();
+$("#lock").onsubmit = async e => {
+  e.preventDefault();
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("workoutlog-sync:" + $("#pw").value));
+  localStorage.setItem("wl:key", btoa(String.fromCharCode(...new Uint8Array(h))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+  $("#pw").value = ""; render(); sync();
 };
+$("#lockBtn").onclick = () => { localStorage.removeItem("wl:key"); localStorage.removeItem("workouts"); items = []; render(); };
 document.onvisibilitychange = () => document.visibilityState === "visible" && sync();
-
-$("#exp").onclick = () => {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(items, null, 1)], { type: "application/json" }));
-  a.download = `workouts-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-};
-$("#imp").onclick = () => $("#file").click();
-$("#file").onchange = async e => {
-  try {
-    const data = JSON.parse(await e.target.files[0].text());
-    if (!Array.isArray(data) || data.some(w => !w.del && !TYPES[w.type] || !w.date || !(w.min >= 0))) throw 0;
-    const have = new Set(items.map(w => w.id));
-    items.push(...data.filter(w => !have.has(w.id)).map(w => ({ upd: Date.now(), ...w })));
-    save(); sync(); render();
-  } catch { alert("Not a valid workout export."); }
-  e.target.value = "";
-};
+addEventListener("online", sync);
 
 render();
 sync();
