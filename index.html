@@ -149,7 +149,7 @@ function render() {
   $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Miles<th>Calories<th>Avg HR</tr>" +
     Object.keys(wk).sort().reverse().map(k => {
       const t = wk[k];
-      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.m ? (t.m / M_PER.mi).toFixed(1) : "–"}<td class="${t.cal >= 4800 ? "good" : "bad"}">${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
+      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.m ? (t.m / M_PER.mi).toFixed(1) : "–"}<td class="${t.cal >= 4000 ? "good" : "bad"}">${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
     }).join("");
 
   const by = {};
