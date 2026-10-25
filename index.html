@@ -81,13 +81,14 @@
 // kind: how derived pace/speed is shown. swim distances are entered in metres, everything else in km/mi.
 const TYPES = {
   "Outdoor Bike":   { kind: "speed" },
-  "Indoor Bike":    { kind: "speed" },
+  "Indoor Bike":    { kind: "speed", hide: ["dist"] },
   "Outdoor Run":    { kind: "pace" },
   "Indoor Run":     { kind: "pace" },
   "Openwater Swim": { kind: "swim" },
   "Pool Swim":      { kind: "swim" },
   "Hike":           { kind: "pace" },
   "Walk":           { kind: "pace" },
+  "Rest Day":       { kind: "rest", hide: ["min", "dist", "cal", "hr", "hrmax", "note"] },
 };
 const M_PER = { km: 1000, mi: 1609.344 };
 const $ = s => document.querySelector(s), f = $("#f");
@@ -115,11 +116,17 @@ function derived(w) {
 function render() {
   $("#u").value = unit;
   $("#sul").hidden = f.type.value !== "Pool Swim";
+  const hide = TYPES[f.type.value].hide || [];
+  for (const k of ["min", "dist", "cal", "hr", "hrmax", "note"]) {
+    f[k].parentElement.hidden = hide.includes(k);
+    if (hide.includes(k)) f[k].value = "";
+  }
+  f.min.required = !hide.includes("min");
   $("#dl").textContent = `Distance (${isSwim(f.type.value) ? (swimF(f.type.value, f.su.value) === 1 ? "m" : "yd") : unit})`;
   const live = items.filter(w => !w.del);
   $("#list").innerHTML = live.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
-    const bits = [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
-    return `<li><div><b>${w.type}</b> <small>${w.date}</small><br>${bits.join(" · ")}${w.note ? `<br><small>${esc(w.note)}</small>` : ""}</div>
+    const bits = TYPES[w.type].kind === "rest" ? [] : [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
+    return `<li><div><b>${w.type}</b> <small>${w.date}</small>${bits.length ? "<br>" + bits.join(" · ") : ""}${w.note ? `<br><small>${esc(w.note)}</small>` : ""}</div>
       <div><button class="del" data-edit="${w.id}" title="Edit" aria-label="Edit">✎</button><button class="del" data-id="${w.id}" title="Delete" aria-label="Delete">✕</button></div></li>`;
   }).join("") || '<li class="mut">No workouts yet.</li>';
 
@@ -129,7 +136,8 @@ function render() {
     const d = new Date(w.date + "T00:00");
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
     const t = wk[d.toLocaleDateString("en-CA")] ??= { n: 0, min: 0, m: 0, cal: 0, hrMin: 0, hrSum: 0 };
-    t.n++; t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
+    if (TYPES[w.type].kind !== "rest") t.n++; // rest days don't count as workouts
+    t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
     if (w.hr) { t.hrMin += w.min; t.hrSum += w.hr * w.min; }
   }
   $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Miles<th>Calories<th>Avg HR</tr>" +
@@ -143,7 +151,7 @@ function render() {
     const t = by[w.type] ??= { n: 0, min: 0, m: 0, cal: 0 };
     t.n++; t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
   }
-  $("#tot").innerHTML = Object.entries(by).map(([type, t]) =>
+  $("#tot").innerHTML = Object.entries(by).map(([type, t]) => TYPES[type].kind === "rest" ? `<div><b>${type}</b><br>${t.n}×</div>` :
     `<div><b>${type}</b><br>${t.n}× · ${hm(t.min)}<br>${dist({ type, m: t.m })}${t.cal ? ` · ${t.cal} kcal` : ""}</div>`).join("") || '<span class="mut">—</span>';
 }
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -159,7 +167,7 @@ f.onsubmit = e => {
   const d = n("dist");
   items = items.filter(w => w.id !== editing);
   items.push({
-    id: editing ?? Date.now(), upd: Date.now(), date: f.date.value, type: f.type.value, min: n("min"),
+    id: editing ?? Date.now(), upd: Date.now(), date: f.date.value, type: f.type.value, min: n("min") ?? 0,
     su: f.type.value === "Pool Swim" ? f.su.value : undefined,
     m: d == null ? undefined : d * (isSwim(f.type.value) ? swimF(f.type.value, f.su.value) : M_PER[unit]),
     cal: n("cal"), hr: n("hr"), hrmax: n("hrmax"), note: f.note.value.trim() || undefined,
