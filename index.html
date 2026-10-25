@@ -22,11 +22,20 @@
   li small, .mut { color:var(--mut); }
   .del { border:0; background:none; color:var(--mut); }
   .tot { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
+  table { width:100%; border-collapse:collapse; text-align:right; }
+  th, td { padding:6px 4px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { font-size:.8rem; color:var(--mut); font-weight:normal; }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 </style>
 </head>
 <body>
 <h1>Workout Log</h1>
+
+<h2>Weeks</h2>
+<table id="weeks"></table>
+
+<h2>Add workout</h2>
 
 <form id="f">
   <label>Date <input name="date" type="date" required></label>
@@ -108,6 +117,21 @@ function render() {
     return `<li><div><b>${w.type}</b> <small>${w.date}</small><br>${bits.join(" · ")}${w.note ? `<br><small>${esc(w.note)}</small>` : ""}</div>
       <div><button class="del" data-edit="${w.id}" title="Edit" aria-label="Edit">✎</button><button class="del" data-id="${w.id}" title="Delete" aria-label="Delete">✕</button></div></li>`;
   }).join("") || '<li class="mut">No workouts yet.</li>';
+
+  // Weeks start Monday. Avg HR is weighted by duration, over workouts that logged HR.
+  const wk = {};
+  for (const w of live) {
+    const d = new Date(w.date + "T00:00");
+    d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+    const t = wk[d.toLocaleDateString("en-CA")] ??= { n: 0, min: 0, cal: 0, hrMin: 0, hrSum: 0 };
+    t.n++; t.min += w.min; t.cal += w.cal || 0;
+    if (w.hr) { t.hrMin += w.min; t.hrSum += w.hr * w.min; }
+  }
+  $("#weeks").innerHTML = "<tr><th>Week of<th>Workouts<th>Hours<th>Calories<th>Avg HR</tr>" +
+    Object.keys(wk).sort().reverse().map(k => {
+      const t = wk[k];
+      return `<tr><td>${k}<td>${t.n}<td>${(t.min / 60).toFixed(1)}<td>${t.cal || "–"}<td>${t.hrMin ? Math.round(t.hrSum / t.hrMin) : "–"}</tr>`;
+    }).join("");
 
   const by = {};
   for (const w of live) {
