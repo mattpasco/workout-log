@@ -37,7 +37,8 @@
   <label>Avg HR (bpm) <input name="hr" type="number" min="0"></label>
   <label>Max HR (bpm) <input name="hrmax" type="number" min="0"></label>
   <label>Notes <input name="note"></label>
-  <button class="go wide">Add workout</button>
+  <button class="go wide" id="sub">Add workout</button>
+  <button type="button" class="wide" id="cancel" hidden>Cancel edit</button>
 </form>
 
 <h2>Totals</h2>
@@ -54,7 +55,16 @@
   <button id="imp">Import JSON</button>
   <input id="file" type="file" accept=".json" hidden>
 </div>
-<p class="mut">Data is stored only in this browser. Export regularly to back it up.</p>
+<details>
+  <summary>Sync across devices <span class="mut" id="st"></span></summary>
+  <p class="mut">Data is saved in this browser and, if configured, synced to a private GitHub repo.
+    Create a fine-grained token with <i>Contents: read &amp; write</i> on that one repo, and paste it on each device.</p>
+  <div class="row">
+    <input id="repo" placeholder="owner/repo" value="mattpasco/workout-data">
+    <input id="tok" type="password" placeholder="GitHub token" autocomplete="off">
+    <button id="syncbtn">Save &amp; sync</button>
+  </div>
+</details>
 
 <script>
 // kind: how derived pace/speed is shown. swim distances are entered in metres, everything else in km/mi.
@@ -71,7 +81,9 @@ const TYPES = {
 const M_PER = { km: 1000, mi: 1609.344 };
 const $ = s => document.querySelector(s), f = $("#f");
 const load = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
-let items = load("workouts") || [];
+let items = load("workouts") || []; // deletions stay as {id, upd, del:true} tombstones so they sync
+let cfg = load("sync") || {};
+let editing = null;
 let unit = load("unit") || "km";
 const save = () => { localStorage.setItem("workouts", JSON.stringify(items)); localStorage.setItem("unit", JSON.stringify(unit)); };
 const isSwim = t => TYPES[t].kind === "swim";
@@ -90,14 +102,15 @@ function derived(w) {
 function render() {
   $("#u").value = unit;
   $("#dl").textContent = isSwim(f.type.value) ? "Distance (m)" : `Distance (${unit})`;
-  $("#list").innerHTML = [...items].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
+  const live = items.filter(w => !w.del);
+  $("#list").innerHTML = live.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(w => {
     const bits = [hm(w.min), dist(w), derived(w), w.cal && `${w.cal} kcal`, w.hr && `♥ ${w.hr}${w.hrmax ? "/" + w.hrmax : ""}`].filter(Boolean);
     return `<li><div><b>${w.type}</b> <small>${w.date}</small><br>${bits.join(" · ")}${w.note ? `<br><small>${esc(w.note)}</small>` : ""}</div>
-      <button class="del" data-id="${w.id}" title="Delete" aria-label="Delete">✕</button></li>`;
+      <div><button class="del" data-edit="${w.id}" title="Edit" aria-label="Edit">✎</button><button class="del" data-id="${w.id}" title="Delete" aria-label="Delete">✕</button></div></li>`;
   }).join("") || '<li class="mut">No workouts yet.</li>';
 
   const by = {};
-  for (const w of items) {
+  for (const w of live) {
     const t = by[w.type] ??= { n: 0, min: 0, m: 0, cal: 0 };
     t.n++; t.min += w.min; t.m += w.m || 0; t.cal += w.cal || 0;
   }
@@ -115,20 +128,77 @@ f.onsubmit = e => {
   e.preventDefault();
   const n = k => f[k].value === "" ? undefined : +f[k].value;
   const d = n("dist");
+  items = items.filter(w => w.id !== editing);
   items.push({
-    id: Date.now(), date: f.date.value, type: f.type.value, min: n("min"),
+    id: editing ?? Date.now(), upd: Date.now(), date: f.date.value, type: f.type.value, min: n("min"),
     m: d == null ? undefined : d * (isSwim(f.type.value) ? 1 : M_PER[unit]),
     cal: n("cal"), hr: n("hr"), hrmax: n("hrmax"), note: f.note.value.trim() || undefined,
   });
-  save();
-  for (const k of ["min", "dist", "cal", "hr", "hrmax", "note"]) f[k].value = "";
-  render();
+  save(); sync();
+  resetForm();
 };
 
+function resetForm() {
+  editing = null;
+  for (const k of ["min", "dist", "cal", "hr", "hrmax", "note"]) f[k].value = "";
+  $("#sub").textContent = "Add workout"; $("#cancel").hidden = true;
+  render();
+}
+$("#cancel").onclick = resetForm;
+
 $("#list").onclick = e => {
-  const id = e.target.dataset.id;
-  if (id && confirm("Delete this workout?")) { items = items.filter(w => w.id != id); save(); render(); }
+  const { id, edit } = e.target.dataset;
+  if (edit) {
+    const w = items.find(w => w.id == edit);
+    editing = w.id;
+    f.date.value = w.date; f.type.value = w.type; f.min.value = w.min;
+    f.dist.value = w.m == null ? "" : +(w.m / (isSwim(w.type) ? 1 : M_PER[unit])).toFixed(3);
+    f.cal.value = w.cal ?? ""; f.hr.value = w.hr ?? ""; f.hrmax.value = w.hrmax ?? ""; f.note.value = w.note ?? "";
+    $("#sub").textContent = "Save changes"; $("#cancel").hidden = false;
+    render(); f.scrollIntoView();
+  } else if (id && confirm("Delete this workout?")) {
+    items = items.map(w => w.id == id ? { id: w.id, upd: Date.now(), del: true } : w);
+    save(); sync(); render();
+  }
 };
+
+// Sync: the whole list lives in data.json in a private repo; per-id newest `upd` wins on merge.
+const setStatus = t => $("#st").textContent = t;
+const merge = remote => {
+  const m = new Map(items.map(w => [w.id, w]));
+  for (const r of remote) if (!m.has(r.id) || (r.upd || 0) > (m.get(r.id).upd || 0)) m.set(r.id, r);
+  items = [...m.values()];
+};
+const api = (method, body) => fetch(`https://api.github.com/repos/${cfg.repo}/contents/data.json`, {
+  method, cache: "no-store", body: body && JSON.stringify(body),
+  headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/vnd.github+json" },
+});
+let queue = Promise.resolve();
+const sync = () => queue = queue.then(doSync);
+async function doSync() {
+  if (!cfg.token || !cfg.repo) return;
+  setStatus("· syncing…");
+  try {
+    for (let i = 0; i < 3; i++) {
+      const g = await api("GET");
+      let sha;
+      if (g.ok) { const j = await g.json(); sha = j.sha; merge(JSON.parse(decodeURIComponent(escape(atob(j.content))))); }
+      else if (g.status !== 404) throw new Error(g.status);
+      save(); render();
+      const p = await api("PUT", { message: "sync", sha, content: btoa(unescape(encodeURIComponent(JSON.stringify(items)))) });
+      if (p.ok) return setStatus("· synced " + new Date().toLocaleTimeString());
+      if (p.status !== 409 && p.status !== 422) throw new Error(p.status);
+    }
+    throw new Error("conflict");
+  } catch (e) { setStatus(`· sync failed (${e.message}); saved locally`); }
+}
+$("#repo").value = cfg.repo || $("#repo").value;
+$("#syncbtn").onclick = () => {
+  cfg = { repo: $("#repo").value.trim(), token: $("#tok").value.trim() || cfg.token };
+  localStorage.setItem("sync", JSON.stringify(cfg));
+  $("#tok").value = ""; sync();
+};
+document.onvisibilitychange = () => document.visibilityState === "visible" && sync();
 
 $("#exp").onclick = () => {
   const a = document.createElement("a");
@@ -140,15 +210,16 @@ $("#imp").onclick = () => $("#file").click();
 $("#file").onchange = async e => {
   try {
     const data = JSON.parse(await e.target.files[0].text());
-    if (!Array.isArray(data) || data.some(w => !TYPES[w.type] || !w.date || !(w.min >= 0))) throw 0;
+    if (!Array.isArray(data) || data.some(w => !w.del && !TYPES[w.type] || !w.date || !(w.min >= 0))) throw 0;
     const have = new Set(items.map(w => w.id));
-    items.push(...data.filter(w => !have.has(w.id)));
-    save(); render();
+    items.push(...data.filter(w => !have.has(w.id)).map(w => ({ upd: Date.now(), ...w })));
+    save(); sync(); render();
   } catch { alert("Not a valid workout export."); }
   e.target.value = "";
 };
 
 render();
+sync();
 </script>
 </body>
 </html>
